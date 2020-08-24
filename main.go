@@ -19,42 +19,56 @@ var (
 )
 
 const (
-	// CheckHandlerStatusInterval period
+	// CheckHandlerStatusInterval check handlers every time interval
 	CheckHandlerStatusInterval = 5 // seconds
-	
+	// InactiveHandlerThresholdTime max time the handler can remain inactive until it is purged
+	InactiveHandlerThresholdTime = 15 // seconds
+	// MaxHandlers max possible Handlers
+	MaxHandlers = 2
 )
 
 // Handler struct
 type Handler struct {
-	addr      string
-	status    pb.HandlerStatus_Status
-	timestamp time.Time
-	task      string
+	// address
+	addr              string
+	// status of the handler
+	status            pb.HandlerStatus_Status
+	// time of task assignment
+	taskTimestamp     time.Time
+	// time when detected inactive
+	inactiveTimestamp time.Time
+	// assigned task's id
+	task              string
 }
 
 // TaskAllocator struct
 type TaskAllocator struct {
 	mu        sync.Mutex
+	// map of handler to Handler instance
 	handlers  map[string]*Handler
-	tasks     map[string]*TaskUnit
+	// map of task id to Task instance
+	tasks     map[string]*Task
+	// queued tasks buffered channel with buffer equal to maxhandlers
 	taskQueue chan string
 }
 
-// TaskUnit struct
-type TaskUnit struct {
+// Task struct
+type Task struct {
 	cid    string
-	// Name   string
+	name   string
 	status pb.TaskStatus_Status
 	handler string
 }
 
 // SubmitTask to the Allocator
 func (t *TaskAllocator) SubmitTask(ctx context.Context, in *pb.Task) (*empty.Empty, error) {
-	
 	// add the task
 	t.mu.Lock()
-	t.tasks[in.VideoCid] = &TaskUnit{in.VideoCid, pb.TaskStatus_UNASSIGNED, ""}
-
+	t.tasks[in.VideoCid] = &Task{in.VideoCid, in.VideoName, pb.TaskStatus_UNASSIGNED, ""}
+	// add to the queue in the background as it is a buffered channel
+	go func () {
+		t.taskQueue <- in.VideoCid
+	}()
 	t.mu.Unlock()
 
 	return &empty.Empty{}, nil
@@ -64,10 +78,30 @@ func (t *TaskAllocator) SubmitTask(ctx context.Context, in *pb.Task) (*empty.Emp
 func (t *TaskAllocator) RegisterHandler(ctx context.Context, in *pb.Handler) (*empty.Empty, error) {
 	// add the handler 
 	t.mu.Lock()
-	t.handlers[in.Addr] = &Handler{in.Addr, pb.HandlerStatus_ACTIVE, time.Time{}, ""}
+	t.handlers[in.Addr] = &Handler{in.Addr, pb.HandlerStatus_ACTIVE, time.Time{}, time.Time{}, ""}
 	t.mu.Unlock()
 
 	return &empty.Empty{}, nil
+}
+
+
+// register the handler as inactive in case of error during communication
+func (t *TaskAllocator) manageInactiveHandler(handlerAddr string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// handler inactive 
+	if (t.handlers[handlerAddr].status == pb.HandlerStatus_INACTIVE) {
+		if (t.handlers[handlerAddr].inactiveTimestamp.Sub(time.Now()) > InactiveHandlerThresholdTime) {
+			// remove from map
+
+			// remove corresponding task back to queue
+		}
+	} else {
+		// change status to inactive
+		t.handlers[handlerAddr].status = pb.HandlerStatus_INACTIVE
+		t.handlers[handlerAddr].inactiveTimestamp = time.Now()
+	}
 }
 
 
@@ -77,6 +111,7 @@ func (t *TaskAllocator) taskStatus(handlerAddr string) {
 	conn, err := grpc.Dial(handlerAddr)
 	if err != nil {
 		log.Println(err)
+		t.manageInactiveHandler(handlerAddr)
 		return
 	}
 	defer conn.Close()
@@ -90,13 +125,32 @@ func (t *TaskAllocator) taskStatus(handlerAddr string) {
 	}
 
 	t.mu.Lock()
-		// if done update the status here
-		if taskStatus.Status == pb.TaskStatus_DONE {
-			var taskUnit *TaskUnit = t.tasks[t.handlers[handlerAddr].task];
-			taskUnit.status = pb.TaskStatus_DONE
-			taskUnit.handler = ""
-		}
-	t.mu.Unlock()
+	defer t.mu.Unlock()
+	// if done update the status here
+	if taskStatus.Status == pb.TaskStatus_DONE {
+		var task *Task = t.tasks[t.handlers[handlerAddr].task];
+		task.status = pb.TaskStatus_DONE
+		task.handler = ""
+	}
+	// TODO else if timestamp is greater than some max deallocate and assign 
+	// to someone else
+}
+
+
+// ping a inactive handler and manage status
+func (t *TaskAllocator) ping(handlerAddr string) {
+	// connect
+	conn, err := grpc.Dial(handlerAddr)
+	if err != nil {
+		log.Println(err)
+		t.manageInactiveHandler(handlerAddr)
+		return
+	}
+	defer conn.Close()
+
+	// alive 
+
+	// possibilities
 }
 
 
@@ -118,7 +172,7 @@ func (t *TaskAllocator) checkStatus() chan bool {
 					case pb.HandlerStatus_WORKING:
 						go t.taskStatus(handlerAddr)
 					case pb.HandlerStatus_INACTIVE:
-						// go ping(handlerAddr)
+						go t.ping(handlerAddr)
 					}
 				}
 
@@ -128,6 +182,61 @@ func (t *TaskAllocator) checkStatus() chan bool {
 			}
 		}
 	}()
+	return quit
+}
+
+// allocate task
+func (t *TaskAllocator) allocateTask(quit chan bool) {
+	for {
+		select {
+		case taskCid := <- t.taskQueue:
+			t.mu.Lock()
+			defer t.mu.Unlock()
+
+			// TODO take from a queue rather than iterating
+			for handlerAddr, handler := range t.handlers {
+				if (handler.status == pb.HandlerStatus_ACTIVE) {
+					// make call to the handler
+					conn, err := grpc.Dial(handlerAddr)
+					if err != nil {
+						log.Println(err)
+						t.manageInactiveHandler(handlerAddr)
+						break;
+					}
+					defer conn.Close()
+
+					// allocate task
+					client := pb.NewTaskAllocationServiceClient(conn)
+					_, errC := client.AllocateTask(context.Background(), &pb.Task{VideoCid: taskCid, VideoName: t.tasks[taskCid].name})
+					if errC != nil {
+						log.Println(errC)
+						break;
+					}
+
+					// update handler variables
+					handler.status = pb.HandlerStatus_WORKING
+					handler.task = taskCid
+					handler.taskTimestamp = time.Now()
+
+					// update task variables
+					t.tasks[taskCid].status = pb.TaskStatus_ASSIGNED
+					t.tasks[taskCid].handler = handlerAddr
+					break;
+				}
+			}
+
+		case <- quit:
+			return
+		}
+	}
+}
+
+// create the task allocators
+func (t *TaskAllocator) allocateTaskManager() chan bool {
+	quit := make(chan bool)
+	for i := 0; i < MaxHandlers; i++ {
+		go t.allocateTask(quit)
+	}
 	return quit
 }
 
@@ -153,18 +262,20 @@ func main() {
 
 	allocator := &TaskAllocator{
 		handlers: make(map[string]*Handler),
-		tasks: make(map[string]*TaskUnit),
-		taskQueue: make(chan string),
+		tasks: make(map[string]*Task),
+		taskQueue: make(chan string, MaxHandlers),
 	}
 
 	pb.RegisterTaskInitServiceServer(grpcServer, allocator)
 	pb.RegisterRegisterHandlerServiceServer(grpcServer, allocator)
 
-	quit := allocator.checkStatus()
+	quitStatusCheck := allocator.checkStatus()
+	quitAllocation := allocator.allocateTaskManager()
 
 	// serve
 	log.Println("Serving on", configs.Server.Port)
 	grpcServer.Serve(lis)
 
-	quit <- true
+	quitStatusCheck <- true
+	quitAllocation <- true
 }
