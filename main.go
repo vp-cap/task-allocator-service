@@ -89,6 +89,26 @@ func (t *TaskAllocator) RegisterHandler(ctx context.Context, in *pb.Handler) (*e
 	return &empty.Empty{}, nil
 }
 
+// RegisterTaskComplete to note task completion and send confirmation to save
+func (t *TaskAllocator) RegisterTaskComplete(ctx context.Context, in *pb.Handler) (*pb.Response, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	handler := t.handlers[in.Addr]
+	// if not removed due to inactivity
+	if handler != nil {
+		task := t.tasks[handler.task]
+		task.status = pb.TaskStatus_DONE
+		task.handler = ""
+		handler.task = ""
+		handler.taskTimestamp = time.Time{}
+		handler.status = pb.HandlerStatus_ACTIVE
+
+		return &pb.Response{StoreInDb: true}, nil
+	}
+	return &pb.Response{StoreInDb: false}, nil
+}
+
 // register the handler as inactive in case of error during communication
 func (t *TaskAllocator) manageInactiveHandler(handlerAddr string) {
 	t.mu.Lock()
@@ -107,8 +127,6 @@ func (t *TaskAllocator) manageInactiveHandler(handlerAddr string) {
 				task.handler = ""
 				task.status = pb.TaskStatus_UNASSIGNED
 			}
-
-			// TODO what to do in the case when the handler is actually not inactive and
 		}
 	} else {
 		// change status to inactive
@@ -135,15 +153,7 @@ func (t *TaskAllocator) taskStatus(handlerAddr string) {
 		log.Println(errC)
 		return
 	}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	// if done update the status here
-	if taskStatus.Status == pb.TaskStatus_DONE {
-		var task *Task = t.tasks[t.handlers[handlerAddr].task]
-		task.status = pb.TaskStatus_DONE
-		task.handler = ""
-	}
+	log.Println(taskStatus)
 	// TODO else if timestamp is greater than some max deallocate and assign
 	// to someone else 
 }
@@ -167,7 +177,7 @@ func (t *TaskAllocator) ping(handlerAddr string) {
 
 	if handler.task != "" {	
 		handler.status = pb.HandlerStatus_WORKING
-		go t.taskStatus(handlerAddr)
+		// go t.taskStatus(handlerAddr)
 	} else {
 		handler.status = pb.HandlerStatus_ACTIVE
 	}
