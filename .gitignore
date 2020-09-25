@@ -1,4 +1,6 @@
 genproto
+video
+process_video
 
 # Binaries for programs and plugins
 *.exe
