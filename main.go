@@ -101,9 +101,11 @@ func (t *TaskAllocator) RegisterTaskComplete(ctx context.Context, in *pb.Handler
 	if handler != nil {
 		log.Println("Task:", handler.task, "Complete")
 	
-		task := t.tasks[handler.task]
-		task.status = pb.TaskStatus_DONE
-		task.handler = ""
+		delete(t.tasks, handler.task)
+		// TODO update in db
+		// task := t.tasks[handler.task]
+		// task.status = pb.TaskStatus_DONE
+		// task.handler = ""
 		handler.task = ""
 		handler.taskTimestamp = time.Time{}
 		handler.status = pb.HandlerStatus_ACTIVE
@@ -163,6 +165,20 @@ func (t *TaskAllocator) taskStatus(handlerAddr string) {
 		return
 	}
 	log.Println("Handler:", handlerAddr, "taskStatus:", taskStatus)
+
+	if taskStatus.Status == pb.TaskStatus_FAILED {
+		// retry with another handler??
+		handler := t.handlers[handlerAddr]
+		delete(t.tasks, handler.task)
+		// TODO update in db
+		// task := t.tasks[handler.task]
+		// task.status = pb.TaskStatus_FAILED
+		// task.handler = ""
+		handler.task = ""
+		handler.taskTimestamp = time.Time{}
+		handler.status = pb.HandlerStatus_ACTIVE
+	}
+
 	// TODO else if timestamp is greater than some max deallocate and assign
 	// to someone else 
 }
