@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"cap/task-allocator-service/config"
-	pb "cap/task-allocator-service/genproto"
+	"github.com/vp-cap/task-allocator-service/config"
+	pb "github.com/vp-cap/task-allocator-service/genproto"
 
 	"github.com/golang/protobuf/ptypes/empty"
 	"google.golang.org/grpc"
@@ -20,7 +20,7 @@ var (
 
 const (
 	// CheckHandlerStatusInterval check handlers every time interval
-	CheckHandlerStatusInterval = 10 *  time.Second
+	CheckHandlerStatusInterval = 10 * time.Second
 	// InactiveHandlerThresholdTime max time the handler can remain inactive until it is purged
 	InactiveHandlerThresholdTime = 20 * time.Second
 	// MaxHandlers max possible Handlers
@@ -100,7 +100,7 @@ func (t *TaskAllocator) RegisterTaskComplete(ctx context.Context, in *pb.Handler
 	// if not removed due to inactivity
 	if handler != nil {
 		log.Println("Task:", handler.task, "Complete")
-	
+
 		delete(t.tasks, handler.task)
 		// TODO update in db
 		// task := t.tasks[handler.task]
@@ -124,7 +124,7 @@ func (t *TaskAllocator) manageInactiveHandler(handlerAddr string) {
 	handler := t.handlers[handlerAddr]
 	// handler inactive
 	if handler.status == pb.HandlerStatus_INACTIVE {
-		log.Println("Time to remove? ", time.Now().Sub(handler.inactiveTimestamp)  > InactiveHandlerThresholdTime)
+		log.Println("Time to remove? ", time.Now().Sub(handler.inactiveTimestamp) > InactiveHandlerThresholdTime)
 		if time.Now().Sub(handler.inactiveTimestamp) > InactiveHandlerThresholdTime {
 			// remove corresponding task back to queue
 			if handler.task != "" {
@@ -180,7 +180,7 @@ func (t *TaskAllocator) taskStatus(handlerAddr string) {
 	}
 
 	// TODO else if timestamp is greater than some max deallocate and assign
-	// to someone else 
+	// to someone else
 }
 
 // ping a inactive handler and manage status
@@ -201,7 +201,7 @@ func (t *TaskAllocator) ping(handlerAddr string) {
 	handler := t.handlers[handlerAddr]
 	handler.inactiveTimestamp = time.Time{}
 
-	if handler.task != "" {	
+	if handler.task != "" {
 		handler.status = pb.HandlerStatus_WORKING
 	} else {
 		handler.status = pb.HandlerStatus_ACTIVE

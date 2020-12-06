@@ -1,8 +1,6 @@
-module cap/task-allocator-service
+module github.com/vp-cap/task-allocator-service
 
-go 1.14
-
-replace cap/task-allocator-service => ./
+go 1.15
 
 require (
 	github.com/golang/protobuf v1.4.2
