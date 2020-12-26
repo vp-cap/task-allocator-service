@@ -1,0 +1,5 @@
+server:
+  port: "50052"
+
+service:
+  UploadService: "host.docker.internal:50051"

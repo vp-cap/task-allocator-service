@@ -6,12 +6,14 @@ import (
 	"net"
 	"sync"
 	"time"
+	"strings"
 
 	"github.com/vp-cap/task-allocator-service/config"
 	pb "github.com/vp-cap/task-allocator-service/genproto"
 
 	"github.com/golang/protobuf/ptypes/empty"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/peer"
 )
 
 var (
@@ -82,12 +84,15 @@ func (t *TaskAllocator) SubmitTask(ctx context.Context, in *pb.Task) (*empty.Emp
 func (t *TaskAllocator) RegisterHandler(ctx context.Context, in *pb.Handler) (*empty.Empty, error) {
 	// add the handler
 	t.mu.Lock()
-	t.handlers[in.Addr] = &Handler{in.Addr, pb.HandlerStatus_ACTIVE, time.Time{}, time.Time{}, ""}
+	p, _ := peer.FromContext(ctx)
+	addr := strings.Split(p.Addr.String(), ":")[0] + in.Addr
+
+	t.handlers[addr] = &Handler{addr, pb.HandlerStatus_ACTIVE, time.Time{}, time.Time{}, ""}
 	go func() {
-		t.handlerQueue <- in.Addr
+		t.handlerQueue <- addr
 	}()
 	t.mu.Unlock()
-	log.Println("New Handler:", in.Addr)
+	log.Println("New Handler:", addr)
 	return &empty.Empty{}, nil
 }
 

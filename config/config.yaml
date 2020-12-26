@@ -1,5 +1,0 @@
-server:
-  port: "50052"
-
-service:
-  UploadService: "localhost:50051"

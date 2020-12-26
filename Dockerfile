@@ -1,24 +1,31 @@
-ARG SERIVCE_PATH="/go/src/vp-cap/task-allocator-service"
+ARG SERVICE_PATH="/go/src/vp-cap/task-allocator-service"
 
 ################## 1st Build Stage ####################
 FROM golang:1.15 AS builder
 LABEL stage=builder
+ARG SERVICE_PATH
+ARG GIT_USER
+ARG GIT_PASS
 
-WORKDIR $(SERIVCE_PATH)
-ADD . .
+WORKDIR ${SERVICE_PATH}
+COPY go.mod .
+COPY go.sum .
 
 ENV GO111MODULE=on
-
-# Cache go mods based on go.sum/go.mod files
+RUN git config --global url."https://$GIT_USER:$GIT_PASS@github.com".insteadOf "https://github.com"
+RUN go env -w GOPRIVATE=github.com/vp-cap
 RUN go mod download
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o task-allocator-service
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go install
+# RUN ls
 
-################## 2nd Build Stage ####################
-
+# ################## 2nd Build Stage ####################
 FROM busybox:1-glibc
+ARG SERVICE_PATH
 
-COPY --from=builder $(SERIVCE_PATH)/upload-service /usr/local/bin/task-allocator-service
-# COPY --from=builder $(SERIVCE_PATH)/config/config.yaml /usr/local/bin/config.yaml
+COPY --from=builder /go/bin/task-allocator-service /usr/local/bin/task-allocator-service
+COPY --from=builder ${SERVICE_PATH}/config.yaml /usr/local/bin/config.yaml
+RUN cd /usr/local/bin && ls
 
-ENTRYPOINT ["./usr/bin/task-allocator-service"]
+ENTRYPOINT ["./usr/local/bin/task-allocator-service"]
